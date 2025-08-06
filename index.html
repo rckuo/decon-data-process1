@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Google Sheets OAuth</title>
+</head>
+<body>
+  <h2>Login & Analyze Google Sheet</h2>
+  <button onclick="login()">Sign in with Google</button><br><br>
+
+  <input type="text" id="sheet_id" placeholder="Paste Google Sheet ID or URL" size="60" />
+  <button onclick="analyze()">Analyze Sheet</button>
+
+  <pre id="output"></pre>
+
+  <script>
+    async function login() {
+      const res = await fetch("https://decon-data-backend.onrender.com/api/login", { credentials: 'include' });
+      const data = await res.json();
+      window.location = data.auth_url;
+    }
+
+    async function analyze() {
+      const sheet_id_input = document.getElementById("sheet_id").value;
+      const sheet_id = extractId(sheet_id_input);
+      const res = await fetch("https://decon-data-backend.onrender.com/api/sheet-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: 'include',
+        body: JSON.stringify({ sheet_id })
+      });
+      const data = await res.json();
+      document.getElementById("output").innerText = JSON.stringify(data, null, 2);
+    }
+
+    function extractId(url) {
+      const match = url.match(/[-\\w]{25,}/);
+      return match ? match[0] : url;
+    }
+  </script>
+</body>
+</html>
