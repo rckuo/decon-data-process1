@@ -1,40 +1,129 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Google Sheets OAuth</title>
+  <meta charset="utf-8"/>
+  <title>Bioproduction Analyzer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    input[type="text"], input[type="number"] { padding: 8px; min-width: 420px; }
+    button { padding: 10px 14px; border: 0; border-radius: 10px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    button.primary { background: #2563eb; color: #fff; }
+    button.secondary { background: #f1f5f9; color: #111827; }
+    .panel { margin-top: 18px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 12px; }
+    .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px; }
+    .card img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
+    .muted { color: #6b7280; font-size: 0.92rem; }
+    .error { color: #b91c1c; }
+  </style>
 </head>
 <body>
   <h2>Login & Analyze Google Sheet</h2>
-  <button onclick="login()">Sign in with Google</button><br><br>
 
-  <input type="text" id="sheet_id" placeholder="Paste Google Sheet ID or URL" size="60" />
-  <button onclick="analyze()">Analyze Sheet</button>
+  <div class="row">
+    <button class="primary" onclick="login()">Sign in with Google</button>
+    <span class="muted">You’ll be redirected back here after authorizing.</span>
+  </div>
 
-  <pre id="output"></pre>
+  <div class="panel">
+    <div class="row" style="margin-bottom:8px;">
+      <input type="text" id="sheet_id" placeholder="Paste Google Sheet URL or ID (must include HPLC sheet; optional II_Production/II)" />
+      <input type="number" id="timepoint" placeholder="Timepoint (e.g., 24)" min="0" step="1" style="max-width:130px"/>
+      <button class="secondary" onclick="analyze()">Analyze & Preview</button>
+    </div>
+
+    <div class="row">
+      <button class="secondary" onclick="downloadFile('pdf')">⬇️ Download PDF</button>
+      <button class="secondary" onclick="downloadFile('zip')">⬇️ Download PNGs (ZIP)</button>
+    </div>
+
+    <div id="status" class="muted" style="margin-top:8px;"></div>
+
+    <div id="preview" class="thumbs"></div>
+  </div>
 
   <script>
+    const API_BASE = "https://decon-data-backend.onrender.com";
+
+    function setStatus(msg, isError=false) {
+      const el = document.getElementById("status");
+      el.textContent = msg || "";
+      el.className = isError ? "error" : "muted";
+    }
+
     async function login() {
-      const res = await fetch("https://decon-data-backend.onrender.com/api/login", { credentials: 'include' });
+      setStatus("Redirecting to Google sign-in…");
+      const res = await fetch(`${API_BASE}/api/login`, { credentials: 'include' });
       const data = await res.json();
       window.location = data.auth_url;
     }
 
-    async function analyze() {
-      const sheet_id_input = document.getElementById("sheet_id").value;
-      const sheet_id = extractId(sheet_id_input);
-      const res = await fetch("https://decon-data-backend.onrender.com/api/sheet-data", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: 'include',
-        body: JSON.stringify({ sheet_id })
-      });
-      const data = await res.json();
-      document.getElementById("output").innerText = JSON.stringify(data, null, 2);
+    function extractId(urlOrId) {
+      const match = String(urlOrId).match(/[-\w]{25,}/);
+      return match ? match[0] : urlOrId;
     }
 
-    function extractId(url) {
-      const match = url.match(/[-\\w]{25,}/);
-      return match ? match[0] : url;
+    async function analyze() {
+      setStatus("");
+      const sheetInput = document.getElementById("sheet_id").value.trim();
+      const t = document.getElementById("timepoint").value.trim();
+
+      if (!sheetInput) { setStatus("Please paste a Google Sheet URL or ID.", true); return; }
+      if (t === "")     { setStatus("Please enter a timepoint (integer).", true); return; }
+
+      const sheet_id = extractId(sheetInput);
+      const timepoint = parseInt(t, 10);
+      if (Number.isNaN(timepoint)) { setStatus("Timepoint must be a valid integer.", true); return; }
+
+      setStatus("Analyzing… generating plots…");
+
+      const res = await fetch(`${API_BASE}/api/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ sheet_id, timepoint })
+      });
+
+      const data = await res.json();
+      if (data.error) { setStatus(data.error, true); return; }
+
+      renderPreviews(data.images || []);
+      setStatus(`Done. Generated ${data.image_count || 0} plot(s).`);
+    }
+
+    function renderPreviews(images) {
+      const box = document.getElementById("preview");
+      box.innerHTML = "";
+      if (!images.length) {
+        box.innerHTML = `<div class="muted">No plots produced. Check that your sheet has expected columns (Strain, Carbon Source, Time, and product columns).</div>`;
+        return;
+      }
+      for (const img of images) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <div class="muted" style="margin-bottom:6px;">${img.title || img.filename}</div>
+          <img src="${img.data_url}" alt="${img.title || img.filename}" />
+        `;
+        box.appendChild(card);
+      }
+    }
+
+    function downloadFile(fmt) {
+      const sheetInput = document.getElementById("sheet_id").value.trim();
+      const t = document.getElementById("timepoint").value.trim();
+      if (!sheetInput || t === "") {
+        setStatus("Please provide both Sheet URL/ID and Timepoint before downloading.", true);
+        return;
+      }
+      const sheet_id = extractId(sheetInput);
+      const timepoint = parseInt(t, 10);
+      const url = `${API_BASE}/api/export?sheet_id=${encodeURIComponent(sheet_id)}&timepoint=${encodeURIComponent(timepoint)}&format=${encodeURIComponent(fmt)}`;
+      // Open in new tab so cross-origin file download works smoothly with credentials
+      window.open(url, "_blank");
     }
   </script>
 </body>
