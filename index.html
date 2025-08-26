@@ -6,18 +6,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    input[type="text"], input[type="number"] { padding: 8px; min-width: 420px; }
-    button { padding: 10px 14px; border: 0; border-radius: 10px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
-    button.primary { background: #2563eb; color: #fff; }
-    button.secondary { background: #f1f5f9; color: #111827; }
-    .panel { margin-top: 18px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 12px; }
-    .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
-    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px; }
-    .card img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
-    .muted { color: #6b7280; font-size: 0.92rem; }
-    .error { color: #b91c1c; }
+    :root {
+      --bg:#fff; --fg:#0f172a; --muted:#64748b; --line:#e5e7eb;
+      --primary:#2563eb; --primary-fg:#fff; --card:#f8fafc;
+    }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+           color:var(--fg); background:var(--bg); margin:24px; }
+    h2 { margin:0 0 10px 0; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    input[type="text"], input[type="number"] {
+      padding:10px 12px; border:1px solid var(--line); border-radius:10px; min-width:420px;
+    }
+    input[type="number"] { max-width:140px; }
+    button { padding:10px 14px; border:0; border-radius:10px; cursor:pointer;
+             box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    button.primary { background:var(--primary); color:var(--primary-fg); }
+    button.secondary { background:#eef2ff; color:#1e293b; }
+    .panel { margin-top:16px; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
+    .thumbs { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+              gap:12px; margin-top:12px; }
+    .card { border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card); }
+    .card-header { padding:8px 10px; font-size:0.9rem; color:var(--muted); border-bottom:1px solid var(--line); }
+    .card img { display:block; width:100%; height:auto; }
+    .muted { color:var(--muted); font-size:0.95rem; }
+    .error { color:#b91c1c; }
+    .spacer { height:6px; }
+    .hidden { display:none; }
   </style>
 </head>
 <body>
@@ -25,35 +39,57 @@
 
   <div class="row">
     <button class="primary" onclick="login()">Sign in with Google</button>
-    <span class="muted">You’ll be redirected back here after authorizing.</span>
+    <span class="muted">Each user must sign in once on their own device.</span>
   </div>
 
   <div class="panel">
-    <div class="row" style="margin-bottom:8px;">
-      <input type="text" id="sheet_id" placeholder="Paste Google Sheet URL or ID (must include HPLC sheet; optional II_Production/II)" />
-      <input type="number" id="timepoint" placeholder="Timepoint (e.g., 24)" min="0" step="1" style="max-width:130px"/>
+    <div class="row" style="margin-bottom:10px;">
+      <input type="text" id="sheet_id" placeholder="Paste Google Sheet URL or ID (must include sheet: HPLC; optional: II_Production / II)"/>
+      <input type="number" id="timepoint" placeholder="Timepoint (e.g., 24)" min="0" step="1"/>
       <button class="secondary" onclick="analyze()">Analyze & Preview</button>
     </div>
 
-    <div class="row">
-      <button class="secondary" onclick="downloadFile('pdf')">⬇️ Download PDF</button>
-      <button class="secondary" onclick="downloadFile('zip')">⬇️ Download PNGs (ZIP)</button>
+    <div class="row" style="margin-bottom:6px;">
+      <button class="secondary" onclick="startJob('pdf')">⬇️ Download PDF (queued)</button>
+      <button class="secondary" onclick="startJob('zip')">⬇️ Download PNGs (ZIP, queued)</button>
+      <span id="queueStatus" class="muted"></span>
     </div>
 
-    <div id="status" class="muted" style="margin-top:8px;"></div>
+    <div id="status" class="muted"></div>
+    <div class="spacer"></div>
 
     <div id="preview" class="thumbs"></div>
   </div>
 
   <script>
+    // ======= CONFIG =======
     const API_BASE = "https://decon-data-backend.onrender.com";
 
+    // ======= UTIL =======
     function setStatus(msg, isError=false) {
       const el = document.getElementById("status");
       el.textContent = msg || "";
       el.className = isError ? "error" : "muted";
     }
+    function setQueue(msg) {
+      document.getElementById("queueStatus").textContent = msg || "";
+    }
+    function extractId(urlOrId) {
+      const m = String(urlOrId || "").match(/[-\w]{25,}/);
+      return m ? m[0] : urlOrId;
+    }
+    function requireInputs() {
+      const sheetInput = document.getElementById("sheet_id").value.trim();
+      const tp = document.getElementById("timepoint").value.trim();
+      if (!sheetInput) { setStatus("Please paste a Google Sheet URL or ID.", true); return null; }
+      if (tp === "")   { setStatus("Please enter a timepoint (integer).", true);   return null; }
+      const sheet_id = extractId(sheetInput);
+      const timepoint = parseInt(tp, 10);
+      if (Number.isNaN(timepoint)) { setStatus("Timepoint must be a valid integer.", true); return null; }
+      return { sheet_id, timepoint };
+    }
 
+    // ======= AUTH =======
     async function login() {
       setStatus("Redirecting to Google sign-in…");
       const res = await fetch(`${API_BASE}/api/login`, { credentials: 'include' });
@@ -61,25 +97,14 @@
       window.location = data.auth_url;
     }
 
-    function extractId(urlOrId) {
-      const match = String(urlOrId).match(/[-\w]{25,}/);
-      return match ? match[0] : urlOrId;
-    }
-
+    // ======= PREVIEW =======
     async function analyze() {
-      setStatus("");
-      const sheetInput = document.getElementById("sheet_id").value.trim();
-      const t = document.getElementById("timepoint").value.trim();
-
-      if (!sheetInput) { setStatus("Please paste a Google Sheet URL or ID.", true); return; }
-      if (t === "")     { setStatus("Please enter a timepoint (integer).", true); return; }
-
-      const sheet_id = extractId(sheetInput);
-      const timepoint = parseInt(t, 10);
-      if (Number.isNaN(timepoint)) { setStatus("Timepoint must be a valid integer.", true); return; }
+      setQueue("");
+      const inp = requireInputs();
+      if (!inp) return;
+      const { sheet_id, timepoint } = inp;
 
       setStatus("Analyzing… generating plots…");
-
       const res = await fetch(`${API_BASE}/api/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -87,8 +112,14 @@
         body: JSON.stringify({ sheet_id, timepoint })
       });
 
-      const data = await res.json();
-      if (data.error) { setStatus(data.error, true); return; }
+      if (res.status === 401) {
+        setStatus("Please click “Sign in with Google” first.", true);
+        return;
+      }
+
+      let data;
+      try { data = await res.json(); } catch { setStatus("Server returned invalid JSON.", true); return; }
+      if (!res.ok || data.error) { setStatus(data.error || `Error ${res.status}`, true); return; }
 
       renderPreviews(data.images || []);
       setStatus(`Done. Generated ${data.image_count || 0} plot(s).`);
@@ -98,32 +129,63 @@
       const box = document.getElementById("preview");
       box.innerHTML = "";
       if (!images.length) {
-        box.innerHTML = `<div class="muted">No plots produced. Check that your sheet has expected columns (Strain, Carbon Source, Time, and product columns).</div>`;
+        box.innerHTML = `<div class="muted">No plots produced. Check that your sheet has <b>Strain</b>, <b>Carbon Source</b>, <b>Time</b>, and product columns like "IA Production (g/L)".</div>`;
         return;
       }
       for (const img of images) {
         const card = document.createElement("div");
         card.className = "card";
         card.innerHTML = `
-          <div class="muted" style="margin-bottom:6px;">${img.title || img.filename}</div>
+          <div class="card-header">${img.title || img.filename}</div>
           <img src="${img.data_url}" alt="${img.title || img.filename}" />
         `;
         box.appendChild(card);
       }
     }
 
-    function downloadFile(fmt) {
-      const sheetInput = document.getElementById("sheet_id").value.trim();
-      const t = document.getElementById("timepoint").value.trim();
-      if (!sheetInput || t === "") {
-        setStatus("Please provide both Sheet URL/ID and Timepoint before downloading.", true);
-        return;
-      }
-      const sheet_id = extractId(sheetInput);
-      const timepoint = parseInt(t, 10);
-      const url = `${API_BASE}/api/export?sheet_id=${encodeURIComponent(sheet_id)}&timepoint=${encodeURIComponent(timepoint)}&format=${encodeURIComponent(fmt)}`;
-      // Open in new tab so cross-origin file download works smoothly with credentials
-      window.open(url, "_blank");
+    // ======= QUEUED DOWNLOADS =======
+    async function startJob(fmt) {
+      const inp = requireInputs();
+      if (!inp) return;
+      const { sheet_id, timepoint } = inp;
+
+      setQueue("Submitting job…");
+      setStatus("");
+
+      const res = await fetch(`${API_BASE}/api/job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ sheet_id, timepoint, format: fmt })
+      });
+
+      if (res.status === 401) { setQueue(""); setStatus("Please click “Sign in with Google” first.", true); return; }
+      let data;
+      try { data = await res.json(); } catch { setQueue(""); setStatus("Server returned invalid JSON.", true); return; }
+      if (!res.ok || data.error) { setQueue(""); setStatus(data.error || `Error ${res.status}`, true); return; }
+
+      const jobId = data.job_id;
+      pollJob(jobId, fmt);
+    }
+
+    async function pollJob(jobId, fmt) {
+      setQueue("Running…");
+      const poll = setInterval(async () => {
+        const res = await fetch(`${API_BASE}/api/job/${jobId}/status`, { credentials: "include" });
+        let st;
+        try { st = await res.json(); } catch { setQueue(""); setStatus("Polling failed (invalid JSON).", true); clearInterval(poll); return; }
+
+        if (st.status === "done") {
+          clearInterval(poll);
+          setQueue("");
+          // Trigger download (cookie travels with window.location)
+          window.location = `${API_BASE}/api/job/${jobId}/download`;
+        } else if (st.status === "error") {
+          clearInterval(poll);
+          setQueue("");
+          setStatus(`Job failed: ${st.error}`, true);
+        }
+      }, 1500);
     }
   </script>
 </body>
