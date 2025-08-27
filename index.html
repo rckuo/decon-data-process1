@@ -31,7 +31,6 @@
     .muted { color:var(--muted); font-size:0.95rem; }
     .error { color:#b91c1c; }
     .spacer { height:6px; }
-    .hidden { display:none; }
   </style>
 </head>
 <body>
@@ -62,10 +61,8 @@
   </div>
 
   <script>
-    // ======= CONFIG =======
     const API_BASE = "https://decon-data-backend.onrender.com";
 
-    // ======= UTIL =======
     function setStatus(msg, isError=false) {
       const el = document.getElementById("status");
       el.textContent = msg || "";
@@ -89,7 +86,6 @@
       return { sheet_id, timepoint };
     }
 
-    // ======= AUTH =======
     async function login() {
       setStatus("Redirecting to Google sign-in…");
       const res = await fetch(`${API_BASE}/api/login`, { credentials: 'include' });
@@ -97,7 +93,6 @@
       window.location = data.auth_url;
     }
 
-    // ======= PREVIEW =======
     async function analyze() {
       setQueue("");
       const inp = requireInputs();
@@ -112,10 +107,7 @@
         body: JSON.stringify({ sheet_id, timepoint })
       });
 
-      if (res.status === 401) {
-        setStatus("Please click “Sign in with Google” first.", true);
-        return;
-      }
+      if (res.status === 401) { setStatus("Please click “Sign in with Google” first.", true); return; }
 
       let data;
       try { data = await res.json(); } catch { setStatus("Server returned invalid JSON.", true); return; }
@@ -165,10 +157,10 @@
       if (!res.ok || data.error) { setQueue(""); setStatus(data.error || `Error ${res.status}`, true); return; }
 
       const jobId = data.job_id;
-      pollJob(jobId, fmt);
+      pollJob(jobId);
     }
 
-    async function pollJob(jobId, fmt) {
+    async function pollJob(jobId) {
       setQueue("Running…");
       const poll = setInterval(async () => {
         const res = await fetch(`${API_BASE}/api/job/${jobId}/status`, { credentials: "include" });
@@ -178,7 +170,6 @@
         if (st.status === "done") {
           clearInterval(poll);
           setQueue("");
-          // Trigger download (cookie travels with window.location)
           window.location = `${API_BASE}/api/job/${jobId}/download`;
         } else if (st.status === "error") {
           clearInterval(poll);
