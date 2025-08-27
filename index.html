@@ -31,10 +31,14 @@
     .muted { color:var(--muted); font-size:0.95rem; }
     .error { color:#b91c1c; }
     .spacer { height:6px; }
+    .seg { display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    .seg button { background:#f1f5f9; color:#0f172a; }
+    .seg .active { background:#111827; color:#fff; }
+    .hidden { display:none; }
   </style>
 </head>
 <body>
-  <h2>Login & Analyze Google Sheet</h2>
+  <h2>Data Analysis for Co-Products</h2>
 
   <div class="row">
     <button class="primary" onclick="login()">Sign in with Google</button>
@@ -42,15 +46,29 @@
   </div>
 
   <div class="panel">
+    <div class="row" style="margin-bottom:8px;">
+      <div class="seg">
+        <button id="btnModeProd" class="active" onclick="setMode('production')">Production</button>
+        <button id="btnModeGrowth" onclick="setMode('growth')">Growth Curves</button>
+      </div>
+    </div>
+
     <div class="row" style="margin-bottom:10px;">
-      <input type="text" id="sheet_id" placeholder="Paste Google Sheet URL or ID (must include sheet: HPLC; optional: II_Production / II)"/>
+      <input type="text" id="sheet_id" placeholder="Paste Google Sheet URL or ID (HPLC & II for Production; OD/OD600/Growth for Growth Curves)"/>
       <input type="number" id="timepoint" placeholder="Timepoint (e.g., 24)" min="0" step="1"/>
       <button class="secondary" onclick="analyze()">Analyze & Preview</button>
     </div>
 
+    <!-- Download buttons (separate per mode) -->
     <div class="row" style="margin-bottom:6px;">
-      <button class="secondary" onclick="startJob('pdf')">⬇️ Download PDF (queued)</button>
-      <button class="secondary" onclick="startJob('zip')">⬇️ Download PNGs (ZIP, queued)</button>
+      <div id="dlProduction">
+        <button class="secondary" onclick="startJob('pdf')">⬇️ Download Production PDF (queued)</button>
+        <button class="secondary" onclick="startJob('zip')">⬇️ Download Production PNGs (ZIP, queued)</button>
+      </div>
+      <div id="dlGrowth" class="hidden">
+        <button class="secondary" onclick="startJobGrowth('pdf')">⬇️ Download Growth PDF (queued)</button>
+        <button class="secondary" onclick="startJobGrowth('zip')">⬇️ Download Growth PNGs (ZIP, queued)</button>
+      </div>
       <span id="queueStatus" class="muted"></span>
     </div>
 
@@ -62,29 +80,25 @@
 
   <script>
     const API_BASE = "https://decon-data-backend.onrender.com";
+    let mode = "production";
+
+    function setMode(m) {
+      mode = m;
+      document.getElementById("btnModeProd").classList.toggle("active", mode==="production");
+      document.getElementById("btnModeGrowth").classList.toggle("active", mode==="growth");
+      document.getElementById("timepoint").classList.toggle("hidden", mode==="growth");
+      document.getElementById("dlProduction").classList.toggle("hidden", mode!=="production");
+      document.getElementById("dlGrowth").classList.toggle("hidden", mode!=="growth");
+      setStatus(""); setQueue(""); document.getElementById("preview").innerHTML="";
+    }
 
     function setStatus(msg, isError=false) {
       const el = document.getElementById("status");
       el.textContent = msg || "";
       el.className = isError ? "error" : "muted";
     }
-    function setQueue(msg) {
-      document.getElementById("queueStatus").textContent = msg || "";
-    }
-    function extractId(urlOrId) {
-      const m = String(urlOrId || "").match(/[-\w]{25,}/);
-      return m ? m[0] : urlOrId;
-    }
-    function requireInputs() {
-      const sheetInput = document.getElementById("sheet_id").value.trim();
-      const tp = document.getElementById("timepoint").value.trim();
-      if (!sheetInput) { setStatus("Please paste a Google Sheet URL or ID.", true); return null; }
-      if (tp === "")   { setStatus("Please enter a timepoint (integer).", true);   return null; }
-      const sheet_id = extractId(sheetInput);
-      const timepoint = parseInt(tp, 10);
-      if (Number.isNaN(timepoint)) { setStatus("Timepoint must be a valid integer.", true); return null; }
-      return { sheet_id, timepoint };
-    }
+    function setQueue(msg) { document.getElementById("queueStatus").textContent = msg || ""; }
+    function extractId(urlOrId) { const m = String(urlOrId || "").match(/[-\w]{25,}/); return m ? m[0] : urlOrId; }
 
     async function login() {
       setStatus("Redirecting to Google sign-in…");
@@ -93,18 +107,34 @@
       window.location = data.auth_url;
     }
 
+    function requireInputs() {
+      const sheetInput = document.getElementById("sheet_id").value.trim();
+      if (!sheetInput) { setStatus("Please paste a Google Sheet URL or ID.", true); return null; }
+      const sheet_id = extractId(sheetInput);
+      if (mode === "production") {
+        const tp = document.getElementById("timepoint").value.trim();
+        if (tp === "") { setStatus("Please enter a timepoint for production.", true); return null; }
+        const timepoint = parseInt(tp, 10);
+        if (Number.isNaN(timepoint)) { setStatus("Timepoint must be a valid integer.", true); return null; }
+        return { sheet_id, timepoint };
+      }
+      return { sheet_id };
+    }
+
     async function analyze() {
       setQueue("");
       const inp = requireInputs();
       if (!inp) return;
-      const { sheet_id, timepoint } = inp;
+
+      const payload = { sheet_id: inp.sheet_id, mode };
+      if (mode === "production") payload.timepoint = inp.timepoint;
 
       setStatus("Analyzing… generating plots…");
       const res = await fetch(`${API_BASE}/api/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ sheet_id, timepoint })
+        body: JSON.stringify(payload)
       });
 
       if (res.status === 401) { setStatus("Please click “Sign in with Google” first.", true); return; }
@@ -114,14 +144,17 @@
       if (!res.ok || data.error) { setStatus(data.error || `Error ${res.status}`, true); return; }
 
       renderPreviews(data.images || []);
-      setStatus(`Done. Generated ${data.image_count || 0} plot(s).`);
+      const msg = mode==="production"
+        ? `Done. Generated ${data.image_count || 0} plot(s) for timepoint ${data.timepoint}.`
+        : `Done. Generated ${data.image_count || 0} growth plot(s).`;
+      setStatus(msg);
     }
 
     function renderPreviews(images) {
       const box = document.getElementById("preview");
       box.innerHTML = "";
       if (!images.length) {
-        box.innerHTML = `<div class="muted">No plots produced. Check that your sheet has <b>Strain</b>, <b>Carbon Source</b>, <b>Time</b>, and product columns like "IA Production (g/L)".</div>`;
+        box.innerHTML = `<div class="muted">No plots produced. Check your sheet columns.</div>`;
         return;
       }
       for (const img of images) {
@@ -135,29 +168,36 @@
       }
     }
 
-    // ======= QUEUED DOWNLOADS =======
+    // Production queued downloads
     async function startJob(fmt) {
-      const inp = requireInputs();
-      if (!inp) return;
-      const { sheet_id, timepoint } = inp;
-
-      setQueue("Submitting job…");
-      setStatus("");
-
+      if (mode !== "production") { setStatus("Switch to Production to use these buttons.", true); return; }
+      const inp = requireInputs(); if (!inp) return;
+      setQueue("Submitting job…"); setStatus("");
       const res = await fetch(`${API_BASE}/api/job`, {
-        method: "POST",
+        method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ sheet_id, timepoint, format: fmt })
+        body: JSON.stringify({ sheet_id: inp.sheet_id, mode: "production", timepoint: inp.timepoint, format: fmt })
       });
-
-      if (res.status === 401) { setQueue(""); setStatus("Please click “Sign in with Google” first.", true); return; }
-      let data;
-      try { data = await res.json(); } catch { setQueue(""); setStatus("Server returned invalid JSON.", true); return; }
+      if (res.status === 401) { setQueue(""); setStatus("Please sign in first.", true); return; }
+      const data = await res.json();
       if (!res.ok || data.error) { setQueue(""); setStatus(data.error || `Error ${res.status}`, true); return; }
+      pollJob(data.job_id);
+    }
 
-      const jobId = data.job_id;
-      pollJob(jobId);
+    // Growth queued downloads
+    async function startJobGrowth(fmt) {
+      if (mode !== "growth") { setStatus("Switch to Growth to use these buttons.", true); return; }
+      const inp = requireInputs(); if (!inp) return;
+      setQueue("Submitting job…"); setStatus("");
+      const res = await fetch(`${API_BASE}/api/job`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheet_id: inp.sheet_id, mode: "growth", format: fmt })
+      });
+      if (res.status === 401) { setQueue(""); setStatus("Please sign in first.", true); return; }
+      const data = await res.json();
+      if (!res.ok || data.error) { setQueue(""); setStatus(data.error || `Error ${res.status}`, true); return; }
+      pollJob(data.job_id);
     }
 
     async function pollJob(jobId) {
@@ -165,19 +205,18 @@
       const poll = setInterval(async () => {
         const res = await fetch(`${API_BASE}/api/job/${jobId}/status`, { credentials: "include" });
         let st;
-        try { st = await res.json(); } catch { setQueue(""); setStatus("Polling failed (invalid JSON).", true); clearInterval(poll); return; }
-
+        try { st = await res.json(); } catch { setQueue(""); setStatus("Polling failed.", true); clearInterval(poll); return; }
         if (st.status === "done") {
-          clearInterval(poll);
-          setQueue("");
+          clearInterval(poll); setQueue("");
           window.location = `${API_BASE}/api/job/${jobId}/download`;
         } else if (st.status === "error") {
-          clearInterval(poll);
-          setQueue("");
-          setStatus(`Job failed: ${st.error}`, true);
+          clearInterval(poll); setQueue(""); setStatus(`Job failed: ${st.error}`, true);
         }
       }, 1500);
     }
+
+    // default UI state
+    setMode('production');
   </script>
 </body>
 </html>
